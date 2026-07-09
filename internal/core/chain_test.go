@@ -14,6 +14,11 @@ func TestNewBlockchain(t *testing.T) {
 	}
 }
 
+// Scenario: An overspending transaction is rejected (FR-4)
+// Given an account whose balance is 100
+// When a transaction attempts to send 150 from that account
+// Then the transaction is rejected
+// And the account balance is unchanged
 func TestAddTransaction(t *testing.T) {
 	bc := NewBlockchain()
 	
@@ -39,6 +44,9 @@ func TestAddTransaction(t *testing.T) {
 	}
 }
 
+// Scenarios tested here:
+// 1. An honest chain validates successfully (FR-6)
+// 2. Tampering with a block is detected (FR-6)
 func TestValidateChain(t *testing.T) {
 	bc := NewBlockchain()
 	difficulty := 2
@@ -49,13 +57,21 @@ func TestValidateChain(t *testing.T) {
 	b1.MineBlock(difficulty)
 	bc.AddBlock(b1)
 	
-	// Test 1: Honest chain should validate
+	// Scenario: An honest chain validates successfully (FR-6)
+	// Given a chain of several mined blocks
+	// When the chain is validated
+	// Then validation reports the chain as valid
 	valid, _ := bc.ValidateChain(difficulty)
 	if !valid {
 		t.Errorf("Honest chain failed validation!")
 	}
 	
-	// Test 2: Tampering! Hacker changes the transaction amount
+	// Scenario: Tampering with a block is detected (FR-6)
+	// Given a valid chain of several blocks
+	// When a transaction inside an earlier block is modified
+	// And the chain is validated
+	// Then validation fails
+	// And it identifies the first block whose hash no longer matches
 	bc.Blocks[1].Transactions[0].Amount = 9000
 	
 	valid, badIndex := bc.ValidateChain(difficulty)

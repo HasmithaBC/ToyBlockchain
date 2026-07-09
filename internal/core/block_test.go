@@ -30,6 +30,10 @@ func TestNewBlock(t *testing.T) {
 	}
 }
 
+// Scenario: Block hashing is deterministic (FR-3)
+// Given a block with fixed fields and a fixed nonce
+// When its hash is computed twice
+// Then both hashes are identical
 func TestCalculateHash_IsDeterministic(t *testing.T) {
 	txs := []Transaction{
 		{Sender: "Alice", Recipient: "Bob", Amount: 10},
@@ -51,6 +55,11 @@ func TestCalculateHash_IsDeterministic(t *testing.T) {
 	}
 }
 
+// Scenario: Chain starts from a deterministic genesis block (FR-2)
+// Given a freshly initialised blockchain
+// When the chain is created
+// Then it contains exactly one block at height 0
+// And that block's previous-hash equals the fixed genesis value
 func TestNewGenesisBlock(t *testing.T) {
 	b := NewGenesisBlock()
 	
@@ -68,6 +77,11 @@ func TestNewGenesisBlock(t *testing.T) {
 	}
 }
 
+// Scenario: A mined block satisfies the difficulty target (FR-5)
+// Given a difficulty of N leading zero digits
+// When a new block is mined
+// Then the block's hash begins with at least N zeros
+// And the found nonce reproduces that exact hash
 func TestMineBlock(t *testing.T) {
 	txs := []Transaction{
 		{Sender: "Alice", Recipient: "Bob", Amount: 50},
