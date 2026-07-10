@@ -37,8 +37,16 @@ func (bc *Blockchain) AddTransaction(sender, recipient string, amount int64) err
 	// 2. Validation: Sender must have enough balance (unless it's the System)
 	if sender != "System" {
 		balances := bc.CalculateBalances()
+		
+		// Subtract any amounts the sender has ALREADY committed to in the PendingPool
+		for _, pendingTx := range bc.PendingPool {
+			if pendingTx.Sender == sender {
+				balances[sender] -= pendingTx.Amount
+			}
+		}
+
 		if balances[sender] < amount {
-			return fmt.Errorf("insufficient balance: %s only has %d", sender, balances[sender])
+			return fmt.Errorf("insufficient balance: %s only has %d available (including pending transactions)", sender, balances[sender])
 		}
 	}
 
@@ -58,7 +66,22 @@ func (bc *Blockchain) AddTransaction(sender, recipient string, amount int64) err
 func (bc *Blockchain) ValidateChain(difficulty int) (bool, int) {
 	target := strings.Repeat("0", difficulty)
 
-	// Start at 1 because block 0 is the Genesis block
+	// Validate Genesis Block (Block 0)
+	if len(bc.Blocks) > 0 {
+		genesis := bc.Blocks[0]
+		if genesis.Index != 0 {
+			return false, 0
+		}
+		if genesis.Hash != genesis.CalculateHash() {
+			return false, 0 // Recomputation failed on Genesis
+		}
+		expectedGenesisPrevHash := strings.Repeat("0", 64)
+		if genesis.PrevHash != expectedGenesisPrevHash {
+			return false, 0 // Genesis block has invalid PrevHash
+		}
+	}
+
+	// Start at 1 for the rest of the chain
 	for i := 1; i < len(bc.Blocks); i++ {
 		currentBlock := bc.Blocks[i]
 		previousBlock := bc.Blocks[i-1]
