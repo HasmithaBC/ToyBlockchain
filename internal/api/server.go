@@ -128,6 +128,8 @@ func (s *Server) handlePostRegister(w http.ResponseWriter, r *http.Request) {
 
 	s.node.AddPeer(req.PeerURL)
 
+	// Instead of text, we return our entire address book back to the new peer!
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	fmt.Fprintf(w, "Success! Peer %s added to address book.\n", req.PeerURL)
+	json.NewEncoder(w).Encode(s.node.GetPeers())
 }
