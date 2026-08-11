@@ -27,6 +27,54 @@ func (bc *Blockchain) AddBlock(b *Block) {
 	bc.Blocks = append(bc.Blocks, b)
 }
 
+// ProcessIncomingBlock validates a block from a peer and appends it if valid.
+func (bc *Blockchain) ProcessIncomingBlock(b *Block, difficulty int) error {
+	lastBlock := bc.Blocks[len(bc.Blocks)-1]
+	
+	// 1. Validate Index
+	if b.Index != lastBlock.Index+1 {
+		return fmt.Errorf("invalid index: expected %d, got %d", lastBlock.Index+1, b.Index)
+	}
+	
+	// 2. Validate PrevHash
+	if b.PrevHash != lastBlock.Hash {
+		return fmt.Errorf("invalid prevhash")
+	}
+	
+	// 3. Validate Hash recomputation
+	if b.Hash != b.CalculateHash() {
+		return fmt.Errorf("invalid hash: recomputation failed")
+	}
+	
+	// 4. Validate Proof of Work
+	target := strings.Repeat("0", difficulty)
+	if !strings.HasPrefix(b.Hash, target) {
+		return fmt.Errorf("invalid proof of work")
+	}
+	
+	// 5. If valid, append the block
+	bc.AddBlock(b)
+	
+	// 6. Clean up the pending pool (remove transactions that are in this new block)
+	var updatedPool []Transaction
+	for _, pendingTx := range bc.PendingPool {
+		found := false
+		for _, blockTx := range b.Transactions {
+			// A simple check to see if the transaction is already in the block
+			if pendingTx.Sender == blockTx.Sender && pendingTx.Recipient == blockTx.Recipient && pendingTx.Amount == blockTx.Amount {
+				found = true
+				break
+			}
+		}
+		if !found {
+			updatedPool = append(updatedPool, pendingTx)
+		}
+	}
+	bc.PendingPool = updatedPool
+
+	return nil
+}
+
 // AddTransaction adds a new transaction to the pending pool after validating it.
 func (bc *Blockchain) AddTransaction(sender, recipient string, amount int64) error {
 	// 1. Validation: Amount must be positive
