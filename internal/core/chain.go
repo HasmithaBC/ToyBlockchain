@@ -162,3 +162,65 @@ func (bc *Blockchain) ValidateChain(difficulty int) (bool, int) {
 
 	return true, -1
 }
+
+// ResolveConflict handles a chain reorganisation (Fork Resolution).
+// It takes a longer chain from a peer, validates it, and if valid, replaces our chain.
+// It safely returns any orphaned transactions to the pending pool.
+func (bc *Blockchain) ResolveConflict(peerBlocks []*Block, difficulty int) bool {
+	// 1. Is it actually longer?
+	if len(peerBlocks) <= len(bc.Blocks) {
+		return false
+	}
+
+	// 2. Validate the peer's chain
+	tempChain := &Blockchain{Blocks: peerBlocks}
+	isValid, _ := tempChain.ValidateChain(difficulty)
+	if !isValid {
+		return false
+	}
+
+	// 3. Find where the chains split (the fork point)
+	forkIndex := 0
+	for i := 0; i < len(bc.Blocks) && i < len(peerBlocks); i++ {
+		if bc.Blocks[i].Hash != peerBlocks[i].Hash {
+			forkIndex = i
+			break
+		}
+	}
+	if forkIndex == 0 {
+		forkIndex = len(bc.Blocks) // No fork, they are just ahead of us
+	}
+
+	// 4. Gather transactions from OUR orphaned blocks (blocks we are about to throw away)
+	for i := forkIndex; i < len(bc.Blocks); i++ {
+		for _, tx := range bc.Blocks[i].Transactions {
+			bc.PendingPool = append(bc.PendingPool, tx)
+		}
+	}
+
+	// 5. Adopt the peer's longer chain
+	bc.Blocks = peerBlocks
+
+	// 6. Clean the PendingPool (remove txs that are already in the new chain)
+	var cleanedPool []Transaction
+	for _, pendingTx := range bc.PendingPool {
+		isMined := false
+		for i := forkIndex; i < len(peerBlocks); i++ {
+			for _, minedTx := range peerBlocks[i].Transactions {
+				if pendingTx.Sender == minedTx.Sender && pendingTx.Recipient == minedTx.Recipient && pendingTx.Amount == minedTx.Amount {
+					isMined = true
+					break
+				}
+			}
+			if isMined {
+				break
+			}
+		}
+		if !isMined {
+			cleanedPool = append(cleanedPool, pendingTx)
+		}
+	}
+	bc.PendingPool = cleanedPool
+
+	return true
+}

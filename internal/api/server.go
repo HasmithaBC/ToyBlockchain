@@ -24,6 +24,7 @@ func StartServer(port string, n *network.Node) {
 	http.HandleFunc("/block", s.handlePostBlock)
 	http.HandleFunc("/peers", s.handleGetPeers)
 	http.HandleFunc("/register", s.handlePostRegister)
+	http.HandleFunc("/sync", s.handlePostSync)
 
 	fmt.Printf("Node listening on port %s...\n", port)
 	
@@ -59,6 +60,14 @@ func (s *Server) handlePostTransaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// NEW: Cache Check
+	if s.node.MarkTransactionAsSeen(tx) {
+		// We already gossiped this. Ignore it to prevent infinite loops!
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "Already seen this transaction. Ignoring.\n")
+		return
+	}
+
 	// 3. Process: Hand it to the Kitchen!
 	err = s.node.Blockchain.AddTransaction(tx.Sender, tx.Recipient, tx.Amount)
 	if err != nil {
@@ -66,9 +75,12 @@ func (s *Server) handlePostTransaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// NEW: We added it successfully, now act like a megaphone!
+	s.node.BroadcastTransaction(tx)
+
 	// 4. Respond: Tell the user it was successful
 	w.WriteHeader(http.StatusCreated)
-	fmt.Fprintf(w, "Success! Transaction added to the pending pool.\n")
+	fmt.Fprintf(w, "Success! Transaction added to the pending pool and broadcasted to peers.\n")
 }
 
 // handlePostBlock accepts a newly mined block from a peer.
@@ -88,13 +100,20 @@ func (s *Server) handlePostBlock(w http.ResponseWriter, r *http.Request) {
 	// We pass the block to the Kitchen to validate it! (Hardcoding difficulty 3 for now)
 	err = s.node.Blockchain.ProcessIncomingBlock(&b, 3)
 	if err != nil {
-		// HTTP 409 Conflict means the block was rejected (invalid hash, index, etc)
+		// If the block is invalid (e.g. its index is way ahead of us), it might mean
+		// we are out of sync and on a shorter fork! Trigger a sync in the background.
+		go s.node.SyncChain()
+
+		// HTTP 409 Conflict means the block was rejected
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 
+	// NEW: We successfully accepted the block. Now act like a megaphone!
+	s.node.BroadcastBlock(b)
+
 	w.WriteHeader(http.StatusCreated)
-	fmt.Fprintf(w, "Block successfully validated and added to the chain!\n")
+	fmt.Fprintf(w, "Block successfully validated, added to the chain, and broadcasted!\n")
 }
 
 // handleGetPeers returns the list of all known friends in the network.
@@ -132,4 +151,17 @@ func (s *Server) handlePostRegister(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(s.node.GetPeers())
+}
+
+// handlePostSync forces the node to ask all peers for their latest blockchain.
+func (s *Server) handlePostSync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Only POST requests are allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	s.node.SyncChain()
+	
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Sync process completed! Check the node's terminal for logs.\n")
 }
