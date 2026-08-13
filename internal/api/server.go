@@ -25,6 +25,10 @@ func StartServer(port string, n *network.Node) {
 	http.HandleFunc("/peers", s.handleGetPeers)
 	http.HandleFunc("/register", s.handlePostRegister)
 	http.HandleFunc("/sync", s.handlePostSync)
+	http.HandleFunc("/balances", s.handleGetBalances)
+	http.HandleFunc("/mempool", s.handleGetMempool)
+	http.HandleFunc("/mine", s.handleGetMine)
+	http.HandleFunc("/validate", s.handleGetValidate)
 
 	fmt.Printf("Node listening on port %s...\n", port)
 	
@@ -69,7 +73,7 @@ func (s *Server) handlePostTransaction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Process: Hand it to the Kitchen!
-	err = s.node.Blockchain.AddTransaction(tx.Sender, tx.Recipient, tx.Amount)
+	err = s.node.Blockchain.AddTransaction(tx)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -165,3 +169,96 @@ func (s *Server) handlePostSync(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "Sync process completed! Check the node's terminal for logs.\n")
 }
+
+// handleGetBalances returns the calculated balances of all accounts.
+func (s *Server) handleGetBalances(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET requests are allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.node.Blockchain.CalculateBalances())
+}
+
+// handleGetMempool returns all transactions currently waiting in the pool.
+func (s *Server) handleGetMempool(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET requests are allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	// We need to briefly RLock the blockchain to safely read the pending pool
+	s.node.Blockchain.Mutex.RLock()
+	defer s.node.Blockchain.Mutex.RUnlock()
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.node.Blockchain.PendingPool)
+}
+
+// handleGetMine triggers the mining process on this node for all pending transactions
+func (s *Server) handleGetMine(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET requests are allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.node.Blockchain.Mutex.Lock()
+
+	lastBlock := s.node.Blockchain.Blocks[len(s.node.Blockchain.Blocks)-1]
+	
+	// Copy pending pool to the new block
+	poolCopy := make([]core.Transaction, len(s.node.Blockchain.PendingPool))
+	copy(poolCopy, s.node.Blockchain.PendingPool)
+	
+	rewardAddr := r.URL.Query().Get("reward")
+	if rewardAddr != "" {
+		rewardTx := core.Transaction{
+			Sender:    "System",
+			Recipient: rewardAddr,
+			Amount:    100, // 100 coins reward for mining!
+		}
+		poolCopy = append([]core.Transaction{rewardTx}, poolCopy...)
+	}
+	
+	newBlock := core.NewBlock(lastBlock.Index+1, poolCopy, lastBlock.Hash)
+	
+	s.node.Blockchain.Mutex.Unlock() // Unlock early so mining doesn't freeze the API!
+
+	difficulty := 3 // Hardcode difficulty for now
+	fmt.Printf("Mining block %d with %d transactions...\n", newBlock.Index, len(newBlock.Transactions))
+	newBlock.MineBlock(difficulty)
+
+	// Validate and add the newly mined block
+	err := s.node.Blockchain.ProcessIncomingBlock(newBlock, difficulty)
+	if err != nil {
+		http.Error(w, "Failed to process mined block: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Broadcast it to the network!
+	s.node.BroadcastBlock(*newBlock)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(newBlock)
+}
+
+// handleGetValidate checks if the current node's blockchain is valid.
+func (s *Server) handleGetValidate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET requests are allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// We use the same hardcoded difficulty of 3
+	valid, badIndex := s.node.Blockchain.ValidateChain(3)
+
+	w.Header().Set("Content-Type", "application/json")
+	response := map[string]interface{}{
+		"is_valid":  valid,
+		"bad_index": badIndex,
+	}
+	
+	json.NewEncoder(w).Encode(response)
+}
+

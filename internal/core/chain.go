@@ -1,14 +1,18 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
+	"sync"
 )
 
 // Blockchain represents the chain of blocks.
 type Blockchain struct {
 	Blocks      []*Block
 	PendingPool []Transaction
+	Mutex       sync.RWMutex
 }
 
 // NewBlockchain initializes a new blockchain with the genesis block.
@@ -23,12 +27,18 @@ func NewBlockchain() *Blockchain {
 
 // AddBlock safely appends a newly mined block to the end of the chain.
 func (bc *Blockchain) AddBlock(b *Block) {
+	bc.Mutex.Lock()
+	defer bc.Mutex.Unlock()
+	
 	// append() is a built-in Go function to add items to a slice
 	bc.Blocks = append(bc.Blocks, b)
 }
 
 // ProcessIncomingBlock validates a block from a peer and appends it if valid.
 func (bc *Blockchain) ProcessIncomingBlock(b *Block, difficulty int) error {
+	bc.Mutex.Lock()
+	defer bc.Mutex.Unlock()
+
 	lastBlock := bc.Blocks[len(bc.Blocks)-1]
 	
 	// 1. Validate Index
@@ -52,16 +62,22 @@ func (bc *Blockchain) ProcessIncomingBlock(b *Block, difficulty int) error {
 		return fmt.Errorf("invalid proof of work")
 	}
 	
-	// 5. If valid, append the block
-	bc.AddBlock(b)
+	// 5. If valid, append the block directly (without calling AddBlock to avoid deadlock)
+	bc.Blocks = append(bc.Blocks, b)
 	
 	// 6. Clean up the pending pool (remove transactions that are in this new block)
 	var updatedPool []Transaction
 	for _, pendingTx := range bc.PendingPool {
 		found := false
+		
+		pendingID := pendingTx.Signature
+		if pendingID == "" { pendingID = pendingTx.Payload() }
+		
 		for _, blockTx := range b.Transactions {
-			// A simple check to see if the transaction is already in the block
-			if pendingTx.Sender == blockTx.Sender && pendingTx.Recipient == blockTx.Recipient && pendingTx.Amount == blockTx.Amount {
+			blockID := blockTx.Signature
+			if blockID == "" { blockID = blockTx.Payload() }
+			
+			if pendingID == blockID {
 				found = true
 				break
 			}
@@ -76,42 +92,46 @@ func (bc *Blockchain) ProcessIncomingBlock(b *Block, difficulty int) error {
 }
 
 // AddTransaction adds a new transaction to the pending pool after validating it.
-func (bc *Blockchain) AddTransaction(sender, recipient string, amount int64) error {
-	// 1. Validation: Amount must be positive
-	if amount <= 0 {
+func (bc *Blockchain) AddTransaction(tx Transaction) error {
+	bc.Mutex.Lock()
+	defer bc.Mutex.Unlock()
+
+	// 1. Validation: Signature MUST be valid
+	if !tx.Verify() {
+		return fmt.Errorf("invalid transaction signature")
+	}
+
+	// 2. Validation: Amount must be positive
+	if tx.Amount <= 0 {
 		return fmt.Errorf("transaction amount must be greater than zero")
 	}
 
-	// 2. Validation: Sender must have enough balance (unless it's the System)
-	if sender != "System" {
-		balances := bc.CalculateBalances()
+	// 3. Validation: Sender must have enough balance (unless it's the System)
+	if tx.Sender != "System" {
+		balances := bc.calculateBalancesUnsafe()
 		
 		// Subtract any amounts the sender has ALREADY committed to in the PendingPool
 		for _, pendingTx := range bc.PendingPool {
-			if pendingTx.Sender == sender {
-				balances[sender] -= pendingTx.Amount
+			if pendingTx.Sender == tx.Sender {
+				balances[tx.Sender] -= pendingTx.Amount
 			}
 		}
 
-		if balances[sender] < amount {
-			return fmt.Errorf("insufficient balance: %s only has %d available (including pending transactions)", sender, balances[sender])
+		if balances[tx.Sender] < tx.Amount {
+			return fmt.Errorf("insufficient balance")
 		}
 	}
 
-	// 3. Add to the waiting room
-	tx := Transaction{
-		Sender:    sender,
-		Recipient: recipient,
-		Amount:    amount,
-	}
+	// 4. Add to the pool
 	bc.PendingPool = append(bc.PendingPool, tx)
-	
 	return nil
 }
 
-// ValidateChain checks the integrity of the entire blockchain.
-// Returns true if valid. If false, it returns the Index of the broken block.
+// ValidateChain checks the integrity of the entire blockchain using a Read-Lock.
 func (bc *Blockchain) ValidateChain(difficulty int) (bool, int) {
+	bc.Mutex.RLock()
+	defer bc.Mutex.RUnlock()
+
 	target := strings.Repeat("0", difficulty)
 
 	// Validate Genesis Block (Block 0)
@@ -167,6 +187,9 @@ func (bc *Blockchain) ValidateChain(difficulty int) (bool, int) {
 // It takes a longer chain from a peer, validates it, and if valid, replaces our chain.
 // It safely returns any orphaned transactions to the pending pool.
 func (bc *Blockchain) ResolveConflict(peerBlocks []*Block, difficulty int) bool {
+	bc.Mutex.Lock()
+	defer bc.Mutex.Unlock()
+
 	// 1. Is it actually longer?
 	if len(peerBlocks) <= len(bc.Blocks) {
 		return false
@@ -205,9 +228,16 @@ func (bc *Blockchain) ResolveConflict(peerBlocks []*Block, difficulty int) bool 
 	var cleanedPool []Transaction
 	for _, pendingTx := range bc.PendingPool {
 		isMined := false
+		
+		pendingID := pendingTx.Signature
+		if pendingID == "" { pendingID = pendingTx.Payload() }
+		
 		for i := forkIndex; i < len(peerBlocks); i++ {
 			for _, minedTx := range peerBlocks[i].Transactions {
-				if pendingTx.Sender == minedTx.Sender && pendingTx.Recipient == minedTx.Recipient && pendingTx.Amount == minedTx.Amount {
+				minedID := minedTx.Signature
+				if minedID == "" { minedID = minedTx.Payload() }
+				
+				if pendingID == minedID {
 					isMined = true
 					break
 				}
@@ -223,4 +253,54 @@ func (bc *Blockchain) ResolveConflict(peerBlocks []*Block, difficulty int) bool 
 	bc.PendingPool = cleanedPool
 
 	return true
+}
+
+// SaveToFile saves the current blockchain state to a JSON file safely.
+func (bc *Blockchain) SaveToFile(filename string) error {
+	bc.Mutex.RLock()
+	defer bc.Mutex.RUnlock()
+	
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	
+	// Create a temporary struct that doesn't include the Mutex
+	data := struct {
+		Blocks      []*Block
+		PendingPool []Transaction
+	}{
+		Blocks:      bc.Blocks,
+		PendingPool: bc.PendingPool,
+	}
+	
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(data)
+}
+
+// LoadFromFile loads the blockchain state from a JSON file safely.
+func (bc *Blockchain) LoadFromFile(filename string) error {
+	bc.Mutex.Lock()
+	defer bc.Mutex.Unlock()
+	
+	file, err := os.Open(filename)
+	if err != nil {
+		return err 
+	}
+	defer file.Close()
+	
+	var data struct {
+		Blocks      []*Block
+		PendingPool []Transaction
+	}
+	
+	if err := json.NewDecoder(file).Decode(&data); err != nil {
+		return err
+	}
+	
+	bc.Blocks = data.Blocks
+	bc.PendingPool = data.PendingPool
+	return nil
 }

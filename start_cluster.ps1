@@ -1,0 +1,5 @@
+Write-Host "Starting ToyBlockchain Cluster..."
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "go run cmd/node/main.go --port 8080"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "go run cmd/node/main.go --port 8081"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "go run cmd/node/main.go --port 8082"
+Write-Host "Cluster started! Nodes running on ports 8080, 8081, and 8082."

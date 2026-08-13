@@ -62,8 +62,11 @@ func (n *Node) GetPeers() []string {
 
 // MarkTransactionAsSeen returns true if it was ALREADY seen.
 func (n *Node) MarkTransactionAsSeen(tx core.Transaction) bool {
-	// A quick way to make a unique ID for our simple transaction
-	txID := fmt.Sprintf("%s-%s-%d", tx.Sender, tx.Recipient, tx.Amount)
+	// The signature is a perfect unique ID!
+	txID := tx.Signature
+	if txID == "" {
+		txID = tx.Payload() // Fallback for System transactions
+	}
 
 	n.seenMutex.Lock()
 	defer n.seenMutex.Unlock()
@@ -110,7 +113,7 @@ func (n *Node) BroadcastBlock(b core.Block) {
 	}
 }
 
-// SyncChain asks all peers for their blockchain. If a longer, valid chain is found, it adopts it.
+// SyncChain asks all peers for their blockchain and mempool.
 func (n *Node) SyncChain() {
 	for _, peer := range n.GetPeers() {
 		// 1. Ask the peer for their notebook
@@ -131,6 +134,28 @@ func (n *Node) SyncChain() {
 		// 3. Attempt to resolve conflicts (Hardcoding difficulty 3)
 		if n.Blockchain.ResolveConflict(peerBlocks, 3) {
 			fmt.Printf("Successfully resolved fork and synced to %d blocks from %s\n", len(peerBlocks), peer)
+		}
+
+		// 4. Ask the peer for their pending transactions (mempool)
+		mempoolURL := fmt.Sprintf("%s/mempool", peer)
+		mempoolResp, err := http.Get(mempoolURL)
+		if err == nil {
+			var peerMempool []core.Transaction
+			if json.NewDecoder(mempoolResp.Body).Decode(&peerMempool) == nil {
+				added := 0
+				for _, tx := range peerMempool {
+					// Only add if we haven't seen it and it's valid!
+					if !n.MarkTransactionAsSeen(tx) {
+						if n.Blockchain.AddTransaction(tx) == nil {
+							added++
+						}
+					}
+				}
+				if added > 0 {
+					fmt.Printf("Successfully synced %d pending transactions from %s\n", added, peer)
+				}
+			}
+			mempoolResp.Body.Close()
 		}
 	}
 }
