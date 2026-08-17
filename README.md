@@ -34,7 +34,7 @@ This automatically creates a `Secret/` folder in your workspace and saves `.key`
 
 ### 2. Mine a Block (Block Rewards)
 
-To inject money into the economy, you can mine an empty block and collect the Coinbase reward (50 coins). The node will automatically look inside your `Secret/` folder for the public key.
+To inject money into the economy, you can mine an empty block and collect the Coinbase reward (100 coins). The node will automatically look inside your `Secret/` folder for the public key.
 ```bash
 go run cmd/client/main.go mine --reward Alice.pub
 ```
@@ -59,6 +59,7 @@ You can run the following commands to interact with the blockchain. Append `--po
 - `print` : Print the entire JSON representation of the node's blockchain
 - `sync` : Manually trigger a node to ask its peers for the longest valid chain
 - `peers` : View the node's address book (list of connected peers)
+- `add-peer` : Manually link two nodes together (and trigger automatic reciprocal registration and synchronization)
 
 Example:
 ```bash
