@@ -151,6 +151,9 @@ func (s *Server) handlePostRegister(w http.ResponseWriter, r *http.Request) {
 
 	s.node.AddPeer(req.PeerURL)
 
+	// Automatically sync with the network whenever a new peer connects!
+	go s.node.SyncChain()
+
 	// Instead of text, we return our entire address book back to the new peer!
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

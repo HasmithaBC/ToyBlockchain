@@ -44,6 +44,8 @@ func main() {
 		handleSync()
 	case "peers":
 		handlePeers()
+	case "add-peer":
+		handleAddPeer()
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -62,6 +64,7 @@ func printUsage() {
 	fmt.Println("  client print [--port 8080]")
 	fmt.Println("  client sync [--port 8080]")
 	fmt.Println("  client peers [--port 8080]")
+	fmt.Println("  client add-peer --port 8080 --peer http://localhost:8081")
 	fmt.Println("")
 	fmt.Println("To start a new P2P node, run:")
 	fmt.Println("  go run cmd/node/main.go --port <port_number>")
@@ -363,6 +366,77 @@ func handlePeers() {
 	} else {
 		for i, p := range peers {
 			fmt.Printf("%d. %s\n", i+1, p)
+		}
+	}
+}
+
+func handleAddPeer() {
+	peerCmd := flag.NewFlagSet("add-peer", flag.ExitOnError)
+	port := peerCmd.String("port", "8080", "Port of the node you want to configure")
+	peerURL := peerCmd.String("peer", "", "The URL of the peer to add (e.g. http://localhost:8081)")
+	peerCmd.Parse(os.Args[2:])
+
+	if *peerURL == "" {
+		fmt.Println("Usage: client add-peer --port 8080 --peer http://localhost:8081")
+		return
+	}
+
+	// 1. Tell the Target Node about the New Peer
+	url1 := fmt.Sprintf("http://localhost:%s/register", *port)
+	reqData1 := map[string]string{"peer_url": *peerURL}
+	jsonData1, _ := json.Marshal(reqData1)
+
+	resp1, err := http.Post(url1, "application/json", bytes.NewBuffer(jsonData1))
+	if err != nil {
+		fmt.Printf("Failed to connect to node on port %s: %v\n", *port, err)
+	} else {
+		defer resp1.Body.Close()
+		if resp1.StatusCode == http.StatusCreated {
+			fmt.Printf("Successfully added %s to Node %s's address book!\n", *peerURL, *port)
+		} else {
+			fmt.Printf("Node %s returned error: %s\n", *port, resp1.Status)
+		}
+	}
+
+	// 2. Tell the New Peer about the Target Node (so they can talk to each other!)
+	targetURL := fmt.Sprintf("http://localhost:%s", *port)
+	reqData2 := map[string]string{"peer_url": targetURL}
+	jsonData2, _ := json.Marshal(reqData2)
+
+	url2 := fmt.Sprintf("%s/register", *peerURL)
+	resp2, err := http.Post(url2, "application/json", bytes.NewBuffer(jsonData2))
+	if err != nil {
+		fmt.Printf("Failed to connect to peer %s: %v\n", *peerURL, err)
+	} else {
+		defer resp2.Body.Close()
+		if resp2.StatusCode == http.StatusCreated {
+			fmt.Printf("Successfully added %s to Peer %s's address book (Reciprocal Registration)!\n", targetURL, *peerURL)
+			
+			// NEW: Decode the peers list returned by the peer to find other nodes in the network!
+			var returnedPeers []string
+			if err := json.NewDecoder(resp2.Body).Decode(&returnedPeers); err == nil {
+				for _, p := range returnedPeers {
+					// Don't add ourselves or the target node again
+					if p == targetURL || p == *peerURL {
+						continue
+					}
+					
+					fmt.Printf("Discovered secondary peer %s! Linking it to %s...\n", p, targetURL)
+					
+					// Tell Node 8080 to add Node 8083
+					req3 := map[string]string{"peer_url": p}
+					json3, _ := json.Marshal(req3)
+					http.Post(fmt.Sprintf("%s/register", targetURL), "application/json", bytes.NewBuffer(json3))
+					
+					// Tell Node 8083 to add Node 8080
+					req4 := map[string]string{"peer_url": targetURL}
+					json4, _ := json.Marshal(req4)
+					http.Post(fmt.Sprintf("%s/register", p), "application/json", bytes.NewBuffer(json4))
+				}
+			}
+			
+		} else {
+			fmt.Printf("Peer %s returned error: %s\n", *peerURL, resp2.Status)
 		}
 	}
 }

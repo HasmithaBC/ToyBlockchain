@@ -27,12 +27,24 @@ type Node struct {
 
 // NewNode creates and returns a fresh Node.
 func NewNode(port string, bc *core.Blockchain) *Node {
-	return &Node{
+	n := &Node{
 		Port:       port,
 		Blockchain: bc,
 		Peers:      make([]string, 0), // Start with an empty address book
 		seenTxs:    make(map[string]bool),
 	}
+	
+	// Pre-warm the cache with all transactions we already know about (from disk)
+	for _, b := range bc.Blocks {
+		for _, tx := range b.Transactions {
+			n.MarkTransactionAsSeen(tx)
+		}
+	}
+	for _, tx := range bc.PendingPool {
+		n.MarkTransactionAsSeen(tx)
+	}
+	
+	return n
 }
 
 // AddPeer safely adds a new friend to our address book using a Lock.

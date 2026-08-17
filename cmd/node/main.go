@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 	"toyblockchain/internal/api"
 	"toyblockchain/internal/core"
@@ -23,8 +25,11 @@ func main() {
 	// 1. Create the core blockchain (The Kitchen)
 	bc := core.NewBlockchain()
 	
+	// Ensure the Chains directory exists
+	os.MkdirAll("Chains", 0755)
+	
 	// 2. Load from disk if available
-	filename := fmt.Sprintf("chain_%s.json", *port)
+	filename := filepath.Join("Chains", fmt.Sprintf("chain_%s.json", *port))
 	err := bc.LoadFromFile(filename)
 	if err == nil {
 		fmt.Printf("Loaded existing blockchain from %s (Height: %d)\n", filename, len(bc.Blocks))
